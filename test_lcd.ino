@@ -160,6 +160,206 @@ static uint8_t fb[48][64] = {
 };
 
 
+static void lcdIfaceInit() {
+ periph_module_enable(PERIPH_I2S0_MODULE);
+/*
+#define IO_PWCLK 19
+#define IO_COLCLK 18
+#define IO_COLSER 5
+#define IO_COLLATCH 17
+#define IO_ROWLATCH0 16
+#define IO_ROWLATCH1 22
+#define IO_ROWLATCH2 23
+#define IO_HC585SEROUT 32
+#define IO_LED1642_RST 35
+*/
+
+	//Init pins to i2s functions
+	pinMatrixOutAttach(18, I2S0O_WS_OUT_IDX, false, false);
+
+	pinMatrixOutAttach(23, I2S0O_DATA_OUT8_IDX, false, false); // bit 0
+	pinMatrixOutAttach(19, I2S0O_DATA_OUT9_IDX, false, false); // bit 1
+	pinMatrixOutAttach(5,  I2S0O_DATA_OUT10_IDX, false, false); // bit 2
+	pinMatrixOutAttach(22, I2S0O_DATA_OUT11_IDX, false, false); // bit 3
+	pinMatrixOutAttach(17, I2S0O_DATA_OUT12_IDX, false, false); // bit 4
+
+	// enable apll
+	rtc_clk_apll_enable(1, 0, 0, 6, 5); // 1, sdm0, sdm1, sdm2, odir
+
+	//Reset I2S subsystem
+	I2S0.conf.rx_reset=1; I2S0.conf.tx_reset=1;
+	I2S0.conf.rx_reset=0; I2S0.conf.tx_reset=0;
+
+	I2S0.conf2.val=0;
+	I2S0.conf2.lcd_en=1;
+
+	// Both I2S_LCD_TX_SDX2_EN bit and
+	// I2S_LCD_TX_WRX2_EN bit are set to 1 in the data frame, form 2
+	I2S0.conf2.lcd_tx_wrx2_en = 0;
+	I2S0.conf2.lcd_tx_sdx2_en = 0;
+
+
+	I2S0.sample_rate_conf.rx_bits_mod=16;
+	I2S0.sample_rate_conf.tx_bits_mod=16;
+	I2S0.sample_rate_conf.rx_bck_div_num=2; // min 2
+	I2S0.sample_rate_conf.tx_bck_div_num=2; // min 2
+
+	I2S0.clkm_conf.val=0;
+	I2S0.clkm_conf.clka_en=1;
+	I2S0.clkm_conf.clk_en=0;
+	I2S0.clkm_conf.clkm_div_a=0;
+	I2S0.clkm_conf.clkm_div_b=1;
+	I2S0.clkm_conf.clkm_div_num=0;
+
+	I2S0.fifo_conf.val=0;
+	I2S0.fifo_conf.rx_fifo_mod_force_en=1;
+	I2S0.fifo_conf.tx_fifo_mod_force_en=1;
+	I2S0.fifo_conf.rx_fifo_mod=1;
+	I2S0.fifo_conf.tx_fifo_mod=1;
+	I2S0.fifo_conf.rx_data_num=32;
+	I2S0.fifo_conf.tx_data_num=32;
+
+	I2S0.conf1.val=0;
+	I2S0.conf1.tx_stop_en=1;
+	I2S0.conf1.tx_pcm_bypass=1;
+
+	I2S0.conf_chan.val=0;
+	I2S0.conf_chan.tx_chan_mod=1;
+	I2S0.conf_chan.rx_chan_mod=1;
+
+	//Invert WS to active-low
+	I2S0.conf.tx_right_first=0;
+	I2S0.conf.rx_right_first=0;
+	
+	I2S0.timing.val=0;
+
+}
+static void finishDma() {
+
+	while(!(I2S0.int_raw.out_total_eof)) ;
+	while(!(I2S0.int_raw.tx_rempty)) ;
+	while(!(I2S0.state.tx_idle)) ;
+	while(!(I2S0.int_raw.out_done)) ;
+
+
+//	i2s_dump_finish[dump_n].copy(&I2S0);
+
+/*
+	//Reset DMA
+	I2S0.lc_conf.in_rst=1; // I don't know why but 'in link' must be reset as also as 'out link'
+	I2S0.lc_conf.out_rst=1;
+	I2S0.lc_conf.in_rst=0;
+	I2S0.lc_conf.out_rst=0;
+*/
+	I2S0.out_link.start=0;
+
+	//Reset tx
+	I2S0.conf.tx_start = 0;
+
+//	dump_n++;
+//	if(dump_n >= sizeof(i2s_dump_start) / sizeof(i2s_dump_start[0])) --dump_n;
+
+	digitalWrite(21, 0);
+
+}
+
+static volatile lldesc_t dmaDesc[16];
+#define MAX_DMA_ITEM_COUNT 1024
+#define MAX_DMA_ITEM_COUNT_FOR_FIRST 16
+
+//Send a buffer to the LCD using DMA. Not very intelligent, sends only one buffer per time, doesn't
+//chain descriptors.
+//We should end up here after an lcdFlush, with the I2S peripheral reset and clean but configured for
+//FIFO operation.
+static void sendBufDma(uint16_t *buf, int len) {
+
+	digitalWrite(21, 1);
+
+
+	//Reset I2S FIFO
+	I2S0.conf.tx_reset=1;
+	I2S0.conf.tx_fifo_reset=1;
+	I2S0.conf.rx_fifo_reset=1; // I don't know again, rx fifo must also be reset
+	I2S0.conf.tx_reset=0;
+	I2S0.conf.tx_fifo_reset=0;
+	I2S0.conf.rx_fifo_reset=0; 
+
+	//Reset DMA
+	I2S0.lc_conf.in_rst=1; // I don't know why but 'in link' must be reset as also as 'out link'
+	I2S0.lc_conf.out_rst=1;
+	I2S0.lc_conf.in_rst=0;
+	I2S0.lc_conf.out_rst=0;
+
+	//Fill DMA descriptor, each MAX_DMA_ITEM_COUNT entries
+	volatile lldesc_t * pdma = dmaDesc;
+	uint16_t *b = buf;
+	int remain = len;
+	while(remain > 0)
+	{
+		int one_len = MAX_DMA_ITEM_COUNT < remain ? MAX_DMA_ITEM_COUNT: remain;
+		pdma->length=one_len*2;
+		pdma->size=one_len*2;
+		pdma->owner=1;
+		pdma->sosf=0;
+		pdma->buf=(uint8_t *)b;
+		pdma->offset=0; //unused in hw
+		pdma->empty= (int32_t)(pdma + 1);
+		pdma->eof=0;
+
+		remain -= one_len;
+		++pdma;
+		b += one_len;
+	}
+	(pdma-1)->empty = 0; // cut last chain
+	(pdma-1)->eof = 1; // cut last chain
+
+	//Set desc addr
+	I2S0.out_link.addr=((uint32_t)(&(dmaDesc[0])))&I2S_OUTLINK_ADDR;
+
+
+	//Enable and configure DMA
+	I2S0.lc_conf.val= 	typeof(I2S0.lc_conf)  { {
+            .in_rst =             0,
+            .out_rst =            0,
+            .ahbm_fifo_rst =      0,
+            .ahbm_rst =           0,
+            .out_loop_test =      0,
+            .in_loop_test =       0,
+            .out_auto_wrback =    1,
+            .out_no_restart_clr = 0,
+            .out_eof_mode =       1,
+            .outdscr_burst_en =   1,
+            .indscr_burst_en =    0,
+            .out_data_burst_en =  1,
+            .check_owner =        0,
+            .mem_trans_en =       0,
+	} }.val;
+
+
+	//Clear int flags
+	I2S0.int_clr.val=0xFFFFFFFF;
+
+	I2S0.fifo_conf.dscr_en=1;
+
+	//Start transmission
+	I2S0.out_link.start=1;
+
+	// make sure that DMA reads all descriptors and push its first data to FIFO
+	while(I2S0.out_link_dscr == 0 &&
+		I2S0.out_link_dscr_bf0  == 0 &&
+		I2S0.out_link_dscr_bf1 == 0) /**/;
+
+	I2S0.conf.tx_start=1;
+
+
+	// dump
+//	i2s_dump_start[dump_n].copy(&I2S0);
+
+
+//	Serial.printf("%d\r\n", n);
+}
+
+
 void setup() {
 
 	for(int y = 0; y < 48; ++y)
@@ -215,6 +415,8 @@ void setup() {
 	led_post();
 
 	led_post_set_led1642_reg(1, 0xffff); // full LEDs on
+
+	lcdIfaceInit();
 /*
 	for(int i = 0; i < 16; ++i)
 	{
@@ -257,7 +459,7 @@ static constexpr uint32_t gamma_table[256] = {
 #define B_ROWLATCH1 (1<<3)
 #define B_ROWLATCH2 (1<<4)
 
-
+static uint16_t buf[4096];
 
 /*
 	To simplify things,
@@ -285,6 +487,7 @@ time frame:
                            Pixel brightness data(15) + global latch for next line 
 16*8 = 128 clocks     :    All LED on
 
+
 	The last 256 clocks in a time frame are dead clocks; all leds are off at this period.
 */
 
@@ -302,7 +505,7 @@ static int build_brightness(uint16_t *buf, int row, int n)
 
 		for(int bit = 15; bit >= 0; --bit)
 		{
-			uint16_t t;
+			uint16_t t = 0;
 			// set bit
 			if((br & (1<<bit))) t |= B_COLSER;
 
@@ -394,7 +597,31 @@ static void led_set_led1642_reg(int reg, uint16_t val)
 	}
 }
 
-static void 
+static int build_set_led1642_reg(uint16_t *buf, int reg, uint16_t val)
+{
+	for(int i = 0; i < NUM_LED1642; ++i)
+	{
+		for(int bit = 15; bit >= 0; --bit)
+		{
+			uint16_t t = 0;
+			// set bit
+			if((val & (1<<bit))) t |= B_COLSER;
+
+			// latch on
+			if(i == (NUM_LED1642 - 1) &&
+				bit <= reg-1)
+			{
+				// latch (clock count while latch is active; if reg = 7, set CR function)
+				t |= B_COLLATCH;
+			}
+
+			// store
+			*(buf++) = t;
+		}
+	}
+
+	return NUM_LED1642 * 16;
+}
 
 void loop()
 {
@@ -403,76 +630,101 @@ void loop()
 	++r;
 	if(r >= 24) r = 0;
 
+
+	uint16_t *bufp = buf;
+	uint16_t *tmpp;
+
 	for(int n = 0; n <= 14; ++n)
-		transfer_brightness(r, n);
+	{
+		bufp += build_brightness(bufp, r, n);
+	}
 
 
 	for(int n = 0; n < 1776; ++n)
 	{
 		// dummy clock
-		do_clock();
+		*(bufp++)  = 0;
 	}
 
 
-
+	// all LED off
 	for(int i = 0; i < 8; ++ i)
 	{
-		digitalWrite(IO_COLSER, 1);
-		do_clock();
+		*(bufp++) = B_COLSER;
 	}
 
-	led_set_led1642_reg(2, 0x0000); // full LEDs off
+	bufp += build_set_led1642_reg(bufp, 2, 0x0000); // full LEDs off
 
-	digitalWrite(IO_ROWLATCH0, HIGH); // let HCT595 latch the buffer with '1' (clear all LED)
-	digitalWrite(IO_ROWLATCH1, HIGH); // let HCT595 latch the buffer with '1' (clear all LED)
-	digitalWrite(IO_ROWLATCH2, HIGH); // let HCT595 latch the buffer with '1' (clear all LED)
-	digitalWrite(IO_ROWLATCH0, LOW);
-	digitalWrite(IO_ROWLATCH1, LOW);
-	digitalWrite(IO_ROWLATCH2, LOW);
 
+	// row select
+	tmpp = bufp;
 	for(int i = 0; i < 8; ++ i)
 	{
-		digitalWrite(IO_COLSER, i != r%8);
-		do_clock();
+		uint16_t t = 0;
+		if(i != r%8) t |= B_COLSER;
+		*(bufp++) = t;
 	}
 
-	transfer_brightness(r, 15); // global latch of brightness data
+	*(tmpp) |= (B_ROWLATCH0 | B_ROWLATCH1 | B_ROWLATCH2); // let HCT595 latch the buffer with '1' (clear all LED)
+
+	bufp += build_brightness(bufp, r, 15); // global latch of brightness data
+
+
+	tmpp = bufp;
+	bufp += build_set_led1642_reg(bufp, 2, 0xffff); // full LEDs on
 
 	switch(r>>3)
 	{
 	case 2:
-		digitalWrite(IO_ROWLATCH0, HIGH); // let HCT595 latch the buffer
-		digitalWrite(IO_ROWLATCH0, LOW);
+		*(tmpp) |= B_ROWLATCH0;
 		break;
 
 	case 0:
-		digitalWrite(IO_ROWLATCH1, HIGH); // let HCT595 latch the buffer
-		digitalWrite(IO_ROWLATCH1, LOW);
+		*(tmpp) |= B_ROWLATCH1;
 		break;
 
 	case 1:
-		digitalWrite(IO_ROWLATCH2, HIGH); // let HCT595 latch the buffer
-		digitalWrite(IO_ROWLATCH2, LOW);
+		*(tmpp) |= B_ROWLATCH2;
 		break;
-
 	}
+
 
 /*
-	for(int i = 0; i < 24; ++ i)
-	{
-		do_clock();
-
-		delayMicroseconds(10);
-		int readout = digitalRead(IO_HC585SEROUT);
-		Serial.printf("%d: %d (%d)\r\n", i, readout, i != r);
-	}
+	static uint16_t pat[16] = {-1, 1,2,4,8, 16};
+	for(int i = 0; i < 4096; ++i) buf[i] = pat[i%16];
 */
-//	delay(10);
 
-	led_set_led1642_reg(2, 0xffff); // full LEDs on
+	// bit shuffle
+	for(int i = 0; i < 4096; i += 4)
+	{
+		uint16_t t0, t1, t2, t3;
+		t0 = buf[i  ];
+		t1 = buf[i+1];
+		t2 = buf[i+2];
+		t3 = buf[i+3];
+		buf[i  ] = t1;
+		buf[i+1] = t0;
+		buf[i+2] = t3;
+		buf[i+3] = t2;
+	}
 
+	sendBufDma(buf, sizeof(buf) / sizeof(buf[0]));
+	finishDma();
+/*
+	Serial.printf("==BEGIN %d==\r\n", bufp - buf);
+	for(int i = 0; i < 4096; ++i)
+	{
+		Serial.printf("%4d:", i);
+		for(int b = 5; b >= 0; --b)
+		{
+			Serial.print(((1<<b)&buf[i])  ? "1" : "0");
+		}
+		Serial.print("\r\n");
+	}
+	Serial.printf("==END==\r\n");
+*/
 
-
+/*
 	{
 		static uint32_t next = millis() + 1000;
 		static int n = 0;
@@ -491,7 +743,7 @@ void loop()
 			if(n >= 64) n = 0;
 		}
 	}
-
+*/
 }
 
 
