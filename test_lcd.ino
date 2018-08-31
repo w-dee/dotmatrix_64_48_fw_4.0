@@ -592,7 +592,9 @@ void build_second_half()
 		*(bufp++) = t;
 	}
 
-	*(tmpp) |= (B_ROWLATCH0 | B_ROWLATCH1 | B_ROWLATCH2); // let HCT595 latch the buffer with '1' (clear all LED)
+	tmpp[0] |= (B_ROWLATCH0 | B_ROWLATCH1 | B_ROWLATCH2); // let HCT595 latch the buffer with '1' (clear all LED)
+	tmpp[1] |= (B_ROWLATCH0 | B_ROWLATCH1 | B_ROWLATCH2);
+	tmpp[2] |= (B_ROWLATCH0 | B_ROWLATCH1 | B_ROWLATCH2);
 
 	bufp += build_brightness(bufp, r, 15); // global latch of brightness data
 
@@ -600,21 +602,24 @@ void build_second_half()
 	tmpp = bufp;
 	bufp += build_set_led1642_reg(bufp, 2, 0xffff); // full LEDs on
 
+	uint16_t lat_val = 0;
 	switch(r>>3)
 	{
 	case 2:
-		*(tmpp) |= B_ROWLATCH0;
+		lat_val = B_ROWLATCH0;
 		break;
 
 	case 0:
-		*(tmpp) |= B_ROWLATCH1;
+		lat_val = B_ROWLATCH1;
 		break;
 
 	case 1:
-		*(tmpp) |= B_ROWLATCH2;
+		lat_val = B_ROWLATCH2;
 		break;
 	}
-
+	tmpp[0] |= lat_val;
+	tmpp[1] |= lat_val;
+	tmpp[2] |= lat_val;
 
 /*
 	static uint16_t pat[16] = {-1, 1,2,4,8, 16};
