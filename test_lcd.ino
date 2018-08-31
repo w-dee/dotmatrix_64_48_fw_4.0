@@ -544,7 +544,7 @@ void build_first_half()
 		*(bufp++)  = 0;
 	}
 
-	// bit shuffle
+	// word order shuffle
 	for(int i = 0; i < 2048; i += 4)
 	{
 		uint16_t t0, t1, t2, t3;
@@ -552,10 +552,10 @@ void build_first_half()
 		t1 = buf[i+1];
 		t2 = buf[i+2];
 		t3 = buf[i+3];
-		buf[i  ] = r&1;t1;
-		buf[i+1] = r&1;t0;
-		buf[i+2] = r&1;t3;
-		buf[i+3] = r&1;t2;
+		buf[i  ] = t1;
+		buf[i+1] = t0;
+		buf[i+2] = t3;
+		buf[i+3] = t2;
 	}
 
 }
@@ -621,7 +621,7 @@ void build_second_half()
 	for(int i = 0; i < 4096; ++i) buf[i] = pat[i%16];
 */
 
-	// bit shuffle
+	// word order shuffle
 	for(int i = 2048; i < 4096; i += 4)
 	{
 		uint16_t t0, t1, t2, t3;
@@ -629,10 +629,10 @@ void build_second_half()
 		t1 = buf[i+1];
 		t2 = buf[i+2];
 		t3 = buf[i+3];
-		buf[i  ] = r&1;t1;
-		buf[i+1] = r&1;t0;
-		buf[i+2] = r&1;t3;
-		buf[i+3] = r&1;t2;
+		buf[i  ] = t1;
+		buf[i+1] = t0;
+		buf[i+2] = t3;
+		buf[i+3] = t2;
 	}
 
 
