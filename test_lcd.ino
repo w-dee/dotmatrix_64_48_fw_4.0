@@ -234,197 +234,9 @@ static void lcdIfaceInit() {
 	I2S0.timing.val=0;
 
 }
-static void finishDma() {
-
-	while(!(I2S0.int_raw.out_total_eof)) ;
-	while(!(I2S0.int_raw.tx_rempty)) ;
-	while(!(I2S0.state.tx_idle)) ;
-	while(!(I2S0.int_raw.out_done)) ;
 
 
-//	i2s_dump_finish[dump_n].copy(&I2S0);
 
-/*
-	//Reset DMA
-	I2S0.lc_conf.in_rst=1; // I don't know why but 'in link' must be reset as also as 'out link'
-	I2S0.lc_conf.out_rst=1;
-	I2S0.lc_conf.in_rst=0;
-	I2S0.lc_conf.out_rst=0;
-*/
-	I2S0.out_link.start=0;
-
-	//Reset tx
-	I2S0.conf.tx_start = 0;
-
-//	dump_n++;
-//	if(dump_n >= sizeof(i2s_dump_start) / sizeof(i2s_dump_start[0])) --dump_n;
-
-	digitalWrite(21, 0);
-
-}
-
-static volatile lldesc_t dmaDesc[16];
-#define MAX_DMA_ITEM_COUNT 1024
-#define MAX_DMA_ITEM_COUNT_FOR_FIRST 16
-
-//Send a buffer to the LCD using DMA. Not very intelligent, sends only one buffer per time, doesn't
-//chain descriptors.
-//We should end up here after an lcdFlush, with the I2S peripheral reset and clean but configured for
-//FIFO operation.
-static void sendBufDma(uint16_t *buf, int len) {
-
-	digitalWrite(21, 1);
-
-
-	//Reset I2S FIFO
-	I2S0.conf.tx_reset=1;
-	I2S0.conf.tx_fifo_reset=1;
-	I2S0.conf.rx_fifo_reset=1; // I don't know again, rx fifo must also be reset
-	I2S0.conf.tx_reset=0;
-	I2S0.conf.tx_fifo_reset=0;
-	I2S0.conf.rx_fifo_reset=0; 
-
-	//Reset DMA
-	I2S0.lc_conf.in_rst=1; // I don't know why but 'in link' must be reset as also as 'out link'
-	I2S0.lc_conf.out_rst=1;
-	I2S0.lc_conf.in_rst=0;
-	I2S0.lc_conf.out_rst=0;
-
-	//Fill DMA descriptor, each MAX_DMA_ITEM_COUNT entries
-	volatile lldesc_t * pdma = dmaDesc;
-	uint16_t *b = buf;
-	int remain = len;
-	while(remain > 0)
-	{
-		int one_len = MAX_DMA_ITEM_COUNT < remain ? MAX_DMA_ITEM_COUNT: remain;
-		pdma->length=one_len*2;
-		pdma->size=one_len*2;
-		pdma->owner=1;
-		pdma->sosf=0;
-		pdma->buf=(uint8_t *)b;
-		pdma->offset=0; //unused in hw
-		pdma->empty= (int32_t)(pdma + 1);
-		pdma->eof=0;
-
-		remain -= one_len;
-		++pdma;
-		b += one_len;
-	}
-	(pdma-1)->empty = 0; // cut last chain
-	(pdma-1)->eof = 1; // cut last chain
-
-	//Set desc addr
-	I2S0.out_link.addr=((uint32_t)(&(dmaDesc[0])))&I2S_OUTLINK_ADDR;
-
-
-	//Enable and configure DMA
-	I2S0.lc_conf.val= 	typeof(I2S0.lc_conf)  { {
-            .in_rst =             0,
-            .out_rst =            0,
-            .ahbm_fifo_rst =      0,
-            .ahbm_rst =           0,
-            .out_loop_test =      0,
-            .in_loop_test =       0,
-            .out_auto_wrback =    1,
-            .out_no_restart_clr = 0,
-            .out_eof_mode =       1,
-            .outdscr_burst_en =   1,
-            .indscr_burst_en =    0,
-            .out_data_burst_en =  1,
-            .check_owner =        0,
-            .mem_trans_en =       0,
-	} }.val;
-
-
-	//Clear int flags
-	I2S0.int_clr.val=0xFFFFFFFF;
-
-	I2S0.fifo_conf.dscr_en=1;
-
-	//Start transmission
-	I2S0.out_link.start=1;
-
-	// make sure that DMA reads all descriptors and push its first data to FIFO
-	while(I2S0.out_link_dscr == 0 &&
-		I2S0.out_link_dscr_bf0  == 0 &&
-		I2S0.out_link_dscr_bf1 == 0) /**/;
-
-	I2S0.conf.tx_start=1;
-
-
-	// dump
-//	i2s_dump_start[dump_n].copy(&I2S0);
-
-
-//	Serial.printf("%d\r\n", n);
-}
-
-
-void setup() {
-
-	for(int y = 0; y < 48; ++y)
-		for(int x = 0; x < 64; ++x)
-			fb[y][x] = 0;
-
-	for(int y = 0; y < 48; ++y)
-			fb[y][y+16] = 255;
-
-
-	Serial.begin(115200);
-
-
-	pinMode(IO_PWCLK, OUTPUT);
-	pinMode(IO_COLCLK, OUTPUT);
-	pinMode(IO_COLSER, OUTPUT);
-	pinMode(IO_COLLATCH, OUTPUT);
-	pinMode(IO_ROWLATCH0, OUTPUT);
-	pinMode(IO_ROWLATCH1, OUTPUT);
-	pinMode(IO_ROWLATCH2, OUTPUT);
-	pinMode(IO_HC585SEROUT, INPUT);
-	pinMode(IO_LED1642_RST, INPUT);
-
-	pinMode(33, INPUT);
-	pinMode(25, INPUT);
-
-	digitalWrite(IO_PWCLK, LOW);
-	digitalWrite(IO_COLCLK, LOW);
-	digitalWrite(IO_COLSER, LOW);
-	digitalWrite(IO_COLLATCH, LOW);
-	digitalWrite(IO_ROWLATCH0, LOW);
-	digitalWrite(IO_ROWLATCH1, LOW);
-	digitalWrite(IO_ROWLATCH2, LOW);
-
-
-	delay(1000);
-
-	// Here we should repeat setting configuration register several times
-	// at least twice of number of LED1642.
-	// We should enable SDO delay because the timing is too tight to
-	// transfer data on the serial chain if no SDO delay is applied.
-	// Because SDO delay would be set properly only if the previous
-	// LED1642 on the chain has delay on the data,
-	// so we must set SDO delay one by one from the first LED1642 on the chain
-	// to make all LED1642s have proper configuration.
-	for(int i = 0; i <NUM_LED1642 * 4; ++i)
-	{
-		constexpr uint16_t led_config = (1<<13) | // enable SDO delay
-			(1<<11) | (1<<12) |(1<<15); // Output turn-on/off time: on:180ns, off:150ns
-		led_post_set_led1642_reg(7, led_config); // set control register
-	}
-
-	led_post();
-
-	led_post_set_led1642_reg(1, 0xffff); // full LEDs on
-
-	lcdIfaceInit();
-/*
-	for(int i = 0; i < 16; ++i)
-	{
-		led_post_set_led1642_reg(i == 15 ? 5 :3, i*4096/16); // test pattern
-	}
-*/
-
-}
 
 /**
  * Gamma curve function
@@ -461,6 +273,93 @@ static constexpr uint32_t gamma_table[256] = {
 
 static uint16_t buf[4096];
 
+
+static volatile lldesc_t dmaDesc[4];
+#define MAX_DMA_ITEM_COUNT 1024
+
+static void startDma() {
+
+	digitalWrite(21, 1);
+
+
+	//Reset I2S FIFO
+	I2S0.conf.tx_reset=1;
+	I2S0.conf.tx_fifo_reset=1;
+	I2S0.conf.rx_fifo_reset=1; // I don't know again, rx fifo must also be reset
+	I2S0.conf.tx_reset=0;
+	I2S0.conf.tx_fifo_reset=0;
+	I2S0.conf.rx_fifo_reset=0; 
+
+	//Reset DMA
+	I2S0.lc_conf.in_rst=1; // I don't know why but 'in link' must be reset as also as 'out link'
+	I2S0.lc_conf.out_rst=1;
+	I2S0.lc_conf.in_rst=0;
+	I2S0.lc_conf.out_rst=0;
+
+	//Fill DMA descriptor, each MAX_DMA_ITEM_COUNT entries
+	volatile lldesc_t * pdma = dmaDesc;
+	uint16_t *b = buf;
+	int remain = sizeof(buf) / sizeof(buf[0]);
+	while(remain > 0)
+	{
+		int one_len = MAX_DMA_ITEM_COUNT < remain ? MAX_DMA_ITEM_COUNT: remain;
+		pdma->length=one_len*2;
+		pdma->size=one_len*2;
+		pdma->owner=1;
+		pdma->sosf=0;
+		pdma->buf=(uint8_t *)b;
+		pdma->offset=0; //unused in hw
+		pdma->empty= (int32_t)(pdma + 1);
+		pdma->eof=0;
+
+		remain -= one_len;
+		++pdma;
+		b += one_len;
+	}
+
+	pdma[-1].empty = (int32_t)(&dmaDesc[0]); // make loop
+
+	//Set desc addr
+	I2S0.out_link.addr=((uint32_t)(&(dmaDesc[0])))&I2S_OUTLINK_ADDR;
+
+
+	//Enable and configure DMA
+	I2S0.lc_conf.val= 	typeof(I2S0.lc_conf)  { {
+            .in_rst =             0,
+            .out_rst =            0,
+            .ahbm_fifo_rst =      0,
+            .ahbm_rst =           0,
+            .out_loop_test =      0,
+            .in_loop_test =       0,
+            .out_auto_wrback =    1,
+            .out_no_restart_clr = 0,
+            .out_eof_mode =       1,
+            .outdscr_burst_en =   1,
+            .indscr_burst_en =    0,
+            .out_data_burst_en =  1,
+            .check_owner =        0,
+            .mem_trans_en =       0,
+	} }.val;
+
+
+	//Clear int flags
+	I2S0.int_clr.val=0xFFFFFFFF;
+
+	I2S0.fifo_conf.dscr_en=1;
+
+	//Start transmission
+	I2S0.out_link.start=1;
+
+	// make sure that DMA reads required descriptors and push its first data to FIFO
+	while(I2S0.out_link_dscr == 0 &&
+		I2S0.out_link_dscr_bf0  == 0 &&
+		I2S0.out_link_dscr_bf1 == 0) /**/;
+
+	I2S0.conf.tx_start=1;
+
+}
+
+
 /*
 	To simplify things,
 	the LED1642's PWM clock receives exactly the same signal as serial data clock.
@@ -477,8 +376,11 @@ time frame:
               : 
 16*8 = 128 clocks     :    Pixel brightness data(14) for next line 
 
+128 closk             :    dummy
 
-1776 clock            :    dummy
+------------------    2048 clock boundary
+
+1648 clock            :    dummy
 
 8  clocks             :    All LEDs off
 16*8 = 128 clocks     :    All LEDs off
@@ -623,28 +525,53 @@ static int build_set_led1642_reg(uint16_t *buf, int reg, uint16_t val)
 	return NUM_LED1642 * 16;
 }
 
-void loop()
+
+static int r = 0; // current row
+
+void build_first_half()
 {
-	static int r = 0;
-
-	++r;
-	if(r >= 24) r = 0;
-
 
 	uint16_t *bufp = buf;
-	uint16_t *tmpp;
 
 	for(int n = 0; n <= 14; ++n)
 	{
 		bufp += build_brightness(bufp, r, n);
 	}
 
-
-	for(int n = 0; n < 1776; ++n)
+	for(int n = 0; n < 128; ++n)
 	{
 		// dummy clock
 		*(bufp++)  = 0;
 	}
+
+	// bit shuffle
+	for(int i = 0; i < 2048; i += 4)
+	{
+		uint16_t t0, t1, t2, t3;
+		t0 = buf[i  ];
+		t1 = buf[i+1];
+		t2 = buf[i+2];
+		t3 = buf[i+3];
+		buf[i  ] = r&1;t1;
+		buf[i+1] = r&1;t0;
+		buf[i+2] = r&1;t3;
+		buf[i+3] = r&1;t2;
+	}
+
+}
+
+void build_second_half()
+{
+
+	uint16_t *bufp = buf + 2048;
+	uint16_t *tmpp;
+
+	for(int n = 0; n < 1648; ++n)
+	{
+		// dummy clock
+		*(bufp++)  = 0;
+	}
+
 
 
 	// all LED off
@@ -695,21 +622,38 @@ void loop()
 */
 
 	// bit shuffle
-	for(int i = 0; i < 4096; i += 4)
+	for(int i = 2048; i < 4096; i += 4)
 	{
 		uint16_t t0, t1, t2, t3;
 		t0 = buf[i  ];
 		t1 = buf[i+1];
 		t2 = buf[i+2];
 		t3 = buf[i+3];
-		buf[i  ] = t1;
-		buf[i+1] = t0;
-		buf[i+2] = t3;
-		buf[i+3] = t2;
+		buf[i  ] = r&1;t1;
+		buf[i+1] = r&1;t0;
+		buf[i+2] = r&1;t3;
+		buf[i+3] = r&1;t2;
 	}
 
-	sendBufDma(buf, sizeof(buf) / sizeof(buf[0]));
-	finishDma();
+
+}
+
+
+void loop()
+{
+
+
+	while(dmaDesc[1].owner == 1) /* */; // wait dmaDesc[1] being finished by DMA 
+	dmaDesc[1].owner = 1;
+	build_first_half();
+
+	while(dmaDesc[3].owner == 1) /* */; // wait dmaDesc[3] being finished by DMA 
+	dmaDesc[3].owner = 1;
+	build_second_half();
+
+	++r;
+	if(r >= 24) r = 0;
+
 /*
 	Serial.printf("==BEGIN %d==\r\n", bufp - buf);
 	for(int i = 0; i < 4096; ++i)
@@ -744,6 +688,69 @@ void loop()
 		}
 	}
 */
+}
+
+void setup() {
+
+	for(int y = 0; y < 48; ++y)
+		for(int x = 0; x < 64; ++x)
+			fb[y][x] = 0;
+
+	for(int y = 0; y < 48; ++y)
+			fb[y][y+16] = 255;
+
+
+	Serial.begin(115200);
+
+
+	pinMode(IO_PWCLK, OUTPUT);
+	pinMode(IO_COLCLK, OUTPUT);
+	pinMode(IO_COLSER, OUTPUT);
+	pinMode(IO_COLLATCH, OUTPUT);
+	pinMode(IO_ROWLATCH0, OUTPUT);
+	pinMode(IO_ROWLATCH1, OUTPUT);
+	pinMode(IO_ROWLATCH2, OUTPUT);
+	pinMode(IO_HC585SEROUT, INPUT);
+	pinMode(IO_LED1642_RST, INPUT);
+
+	pinMode(33, INPUT);
+	pinMode(25, INPUT);
+
+	digitalWrite(IO_PWCLK, LOW);
+	digitalWrite(IO_COLCLK, LOW);
+	digitalWrite(IO_COLSER, LOW);
+	digitalWrite(IO_COLLATCH, LOW);
+	digitalWrite(IO_ROWLATCH0, LOW);
+	digitalWrite(IO_ROWLATCH1, LOW);
+	digitalWrite(IO_ROWLATCH2, LOW);
+
+
+	delay(1000);
+
+	// Here we should repeat setting configuration register several times
+	// at least twice of number of LED1642.
+	// We should enable SDO delay because the timing is too tight to
+	// transfer data on the serial chain if no SDO delay is applied.
+	// Because SDO delay would be set properly only if the previous
+	// LED1642 on the chain has delay on the data,
+	// so we must set SDO delay one by one from the first LED1642 on the chain
+	// to make all LED1642s have proper configuration.
+	for(int i = 0; i <NUM_LED1642 * 4; ++i)
+	{
+		constexpr uint16_t led_config = (1<<13) | // enable SDO delay
+			(1<<11) | (1<<12) |(1<<15); // Output turn-on/off time: on:180ns, off:150ns
+		led_post_set_led1642_reg(7, led_config); // set control register
+	}
+
+	led_post();
+
+	led_post_set_led1642_reg(1, 0xffff); // full LEDs on
+
+	lcdIfaceInit();
+
+
+	startDma();
+
 }
 
 
