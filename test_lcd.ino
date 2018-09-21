@@ -17,13 +17,13 @@
 #include "i2s_struct_dump.h"
 
 
-#define IO_PWCLK 19
+#define IO_PWCLK 18
 #define IO_COLCLK 18
-#define IO_COLSER 5
-#define IO_COLLATCH 17
-#define IO_ROWLATCH0 16
+#define IO_COLSER 23
+#define IO_COLLATCH 19
+#define IO_ROWLATCH0 5
 #define IO_ROWLATCH1 22
-#define IO_ROWLATCH2 23
+#define IO_ROWLATCH2 17
 #define IO_HC585SEROUT 32
 #define IO_LED1642_RST 35
 
@@ -184,7 +184,7 @@ static void lcdIfaceInit() {
 	pinMatrixOutAttach(17, I2S0O_DATA_OUT12_IDX, false, false); // bit 4
 
 	// enable apll
-	rtc_clk_apll_enable(1, 0, 0, 6, 5); // 1, sdm0, sdm1, sdm2, odir
+	rtc_clk_apll_enable(1, 0, 0, 6, 3); // 1, sdm0, sdm1, sdm2, odir
 
 	//Reset I2S subsystem
 	I2S0.conf.rx_reset=1; I2S0.conf.tx_reset=1;
@@ -267,9 +267,9 @@ static constexpr uint32_t gamma_table[256] = {
 
 #define B_COLSER (1<<0)
 #define B_COLLATCH (1<<1)
-#define B_ROWLATCH0 (1<<2)
-#define B_ROWLATCH1 (1<<3)
-#define B_ROWLATCH2 (1<<4)
+#define B_ROWLATCH0 (1<<4)
+#define B_ROWLATCH1 (1<<2)
+#define B_ROWLATCH2 (1<<3)
 
 static uint16_t buf[4096];
 
@@ -696,14 +696,14 @@ void loop()
 }
 
 void setup() {
-
+/*
 	for(int y = 0; y < 48; ++y)
 		for(int x = 0; x < 64; ++x)
 			fb[y][x] = 0;
 
 	for(int y = 0; y < 48; ++y)
 			fb[y][y+16] = 255;
-
+*/
 
 	Serial.begin(115200);
 
